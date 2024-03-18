@@ -76,7 +76,7 @@ app.post('/juntar', async (req, res) => {
   }
 
   const pdfSaved = await pdfDoc.save();
-  console.log('length: ', pdfSaved.length);
+  //console.log('length: ', pdfSaved.length);
   res.set('Content-Type', 'application/pdf');
   res.send(Buffer.from(pdfSaved));
 });
