@@ -1,5 +1,6 @@
 const express = require('express');
-const {PDFDocument, rgb} = require('pdf-lib');
+const axios = require('axios');
+const { PDFDocument, rgb } = require('pdf-lib');
 
 const app = express();
 app.use(express.json()); //Habilita o interpretador de JSON do Express, caso contrario ele nao saberia o que é JSON.
@@ -7,28 +8,43 @@ app.use(express.json()); //Habilita o interpretador de JSON do Express, caso con
 const porta = process.env.PORT || 3000;
 app.listen(porta, () => console.log(`SERVIDOR LIGADO. PORTA: ${porta}.`));
 
-const emitirErro = (res, httpCode = 400, mensagem = '', errorId = 1, extra = {}) => {
+const responderErro = (res, httpCode = 400, mensagem = '', errorId = 1, extra = {}) => {
   return res.status(httpCode).json({http: httpCode, mensagem, erro: errorId, dados: extra});
-}
+};
 
-app.get('/', (req, res, next) => {
-  res.json('END POINT DE TESTE');
-});
+app.get('/', (req, res) => res.json('TESTE BEM SUCEDIDO'));
 
-app.post('/juntar', async (req, res) => {
-  if (!req.is('json')) return emitirErro(res, 400, `A requisição não é JSON.`, 1);
-  if (!req.body?.urls) return emitirErro(res, 400, `O JSON enviado está incompleto, falta o parâmetro "urls" em formato Array.`, 2);
-  if (!Array.isArray(req.body.urls)) return emitirErro(res, 400, `O JSON enviado está incorreto, o parâmetro "urls" não está em formato Array, envie um Array de strings.`, 3);
-  if (req.body.urls.length === 0) return emitirErro(res, 400, `O JSON enviado está incorreto, o parâmetro "urls" está vazio.`, 4);
+app.post('/juntar-urls', async (req, res) => {
+  if (!req.is('json')) return responderErro(res, 400, `A requisição não é JSON.`, 1);
+  if (!req.body?.urls) return responderErro(res, 400, `O JSON enviado está incompleto, falta o parâmetro "urls" em formato Array.`, 2);
+  if (!Array.isArray(req.body.urls)) return responderErro(res, 400, `O JSON enviado está incorreto, o parâmetro "urls" não está em formato Array, envie um Array de strings.`, 3);
+  if (req.body.urls.length === 0) return responderErro(res, 400, `O JSON enviado está incorreto, o parâmetro "urls" está vazio.`, 4);
 
-  const naoPaginar = req.body?.paginacao === false || req.body?.paginacao === null;
+  /** @type {string[]} */
   const urls = req.body.urls.filter(i => !!i && typeof i === 'string');
-  const httpRequisicoes = urls.map(i => fetch(i)); //Baixa os arquivos usando FETCH API
-  const httpRespostas = await Promise.all(httpRequisicoes);
-  for (const i of httpRespostas) if (!i.ok) return emitirErro(res, 400, `Ocorreu um erro ao tentar realizar o download de um dos arquivos para junção.`, 8, {url: i.url});
-  const buffers = await Promise.all(httpRespostas.map(i => i.arrayBuffer()));
+  const naoPaginar = req.body?.paginacao === false || req.body?.paginacao === null;
+
+  let limiteTempoAtingido = false;
+  const controller = new AbortController();
+  const httpRequisicoes = urls.map(i => axios.get(i, {responseType: 'arraybuffer', signal: controller.signal}));
+  const timeoutId = setTimeout(() => {
+    limiteTempoAtingido = true;
+    controller.abort();
+  }, 60000);
+
+  let httpRespostas = [];
+  try {
+    httpRespostas = await Promise.all(httpRequisicoes);
+  } catch (e) {
+    if (limiteTempoAtingido) return responderErro(res, 500, 'O download dos documentos para juntar está tomando tempo demais, seus documentos podem ser grandes demais para juntar. Operação cancelada por prevenção a sobrecarga. Tente comprimir o documento antes ou reduza a quantidade.', 5);
+    return responderErro(res, 400, 'O download dos documentos falhou. Um de seus documentos pode estar corrompido (com defeito) ou ser grande demais para juntar.', 6);
+  } finally {
+    clearTimeout(timeoutId);
+  }
+
+  const buffers = httpRespostas.map(i => i.data);
   const tamanhoTotal = buffers.reduce((carry, i) => carry + i.byteLength, 0);
-  if (tamanhoTotal > 104857600) return emitirErro(res, 400, 'Você ultrapassou o limite de segurança de 100MB. O arquivo é muito grande para ser combinado. Tente comprimi-lo antes ou reduza a quantidade de arquivos. Os softwares de leitura podem apresentar problemas com este tamanho exagerado e as atividades dos outros usuários podem sofrer interrupções por sobrecarga na rede.');
+  if (tamanhoTotal > 104857600) return responderErro(res, 400, 'Você ultrapassou o limite de segurança de 100MB. O arquivo é muito grande para ser combinado. Tente comprimi-lo antes ou reduza a quantidade de arquivos. Os softwares de leitura podem apresentar problemas com este tamanho exagerado e as atividades dos outros usuários podem sofrer interrupções por sobrecarga na rede.', 7);
 
   const escreverPaginacao = (PDFPage, nrPagina) => {
     if (typeof nrPagina !== 'number') nrPagina = parseInt(nrPagina);
