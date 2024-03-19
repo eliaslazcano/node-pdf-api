@@ -94,7 +94,7 @@ app.post('/juntar-urls', async (req, res) => {
   }
 
   const pdfSaved = await pdfDoc.save();
-  //console.log('length: ', pdfSaved.length);
   res.set('Content-Type', 'application/pdf');
+  res.set('Content-Disposition', `inline; filename="${req.body.nome ? req.body.nome : 'documento_combinado.pdf'}"`);
   res.send(Buffer.from(pdfSaved));
 });
