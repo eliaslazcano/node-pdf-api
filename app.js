@@ -21,11 +21,14 @@ app.post('/juntar', async (req, res) => {
   if (!Array.isArray(req.body.urls)) return emitirErro(res, 400, `O JSON enviado está incorreto, o parâmetro "urls" não está em formato Array, envie um Array de strings.`, 3);
   if (req.body.urls.length === 0) return emitirErro(res, 400, `O JSON enviado está incorreto, o parâmetro "urls" está vazio.`, 4);
 
+  const naoPaginar = req.body?.paginacao === false || req.body?.paginacao === null;
   const urls = req.body.urls.filter(i => !!i && typeof i === 'string');
   const httpRequisicoes = urls.map(i => fetch(i)); //Baixa os arquivos usando FETCH API
   const httpRespostas = await Promise.all(httpRequisicoes);
-  for (const i of httpRespostas) if (!i.ok) return emitirErro(res, 400, `Ocorreu um erro ao tentar realizar o download de um dos arquivos para junção.`, 7, {url: i.url});
+  for (const i of httpRespostas) if (!i.ok) return emitirErro(res, 400, `Ocorreu um erro ao tentar realizar o download de um dos arquivos para junção.`, 8, {url: i.url});
   const buffers = await Promise.all(httpRespostas.map(i => i.arrayBuffer()));
+  const tamanhoTotal = buffers.reduce((carry, i) => carry + i.byteLength, 0);
+  if (tamanhoTotal > 104857600) return emitirErro(res, 400, 'Você ultrapassou o limite de segurança de 100MB. O arquivo é muito grande para ser combinado. Tente comprimi-lo antes ou reduza a quantidade de arquivos. Os softwares de leitura podem apresentar problemas com este tamanho exagerado e as atividades dos outros usuários podem sofrer interrupções por sobrecarga na rede.');
 
   const escreverPaginacao = (PDFPage, nrPagina) => {
     if (typeof nrPagina !== 'number') nrPagina = parseInt(nrPagina);
@@ -46,11 +49,10 @@ app.post('/juntar', async (req, res) => {
       size: 11,
       color: rgb(0, 0, 0)
     });
-  }
+  };
 
+  //A partir daqui começa a construção do documento juntado
   const pdfDoc = await PDFDocument.create();
-
-  //A partir daqui começa a junção
   let paginaAtual = 1;
   for (let i = 0; i < buffers.length; i++) {
     const contentType = httpRespostas[i].headers.get('content-type');
@@ -60,7 +62,7 @@ app.post('/juntar', async (req, res) => {
       for (let a = 0; a < pageCount; a++) {
         const [existingPage] = await pdfDoc.copyPages(pdfDocumento, [a]);
         const page = pdfDoc.addPage(existingPage);
-        escreverPaginacao(page, paginaAtual++);
+        if (!naoPaginar) escreverPaginacao(page, paginaAtual++);
       }
     }
     else if (contentType === 'image/jpeg' || contentType === 'image/png') {
@@ -71,7 +73,7 @@ app.post('/juntar', async (req, res) => {
       const x = (width - (img.width * scale)) / 2;
       const y = (height - (img.height * scale)) / 2;
       page.drawImage(img, {x, y, width: img.width * scale, height: img.height * scale});
-      escreverPaginacao(page, paginaAtual++);
+      if (!naoPaginar) escreverPaginacao(page, paginaAtual++);
     }
   }
 
