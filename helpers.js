@@ -5,6 +5,7 @@ const crypto = require('crypto');
 const pdftk = require('node-pdftk');
 
 const responderErro = (res, httpCode = 400, mensagem = '', errorId = 1, extra = {}) => {
+  console.log(`|Erro: ${mensagem}|`);
   return res.status(httpCode).json({http: httpCode, mensagem, erro: errorId, dados: extra});
 };
 
