@@ -42,7 +42,8 @@ app.post('/juntar-urls', async (req, res) => {
   const urls = req.body.urls.filter(i => !!i && typeof i === 'string');
   const naoPaginar = req.body.paginacao === false || req.body.paginacao === null;
   if (urls.length > 132) return responderErro(res, 400, `Não é possível juntar uma quantia enorme de documentos. Limite máximo de 132. Você tentou juntar ${urls.length}.`);
-  console.log(`Processo ${processId}: Ordem para juntar ${urls.length} URLs. Iniciando download.`);
+  console.log(`Processo ${processId}: Inicio do processo!`);
+  console.log(`Processo ${processId}: Ordem para juntar ${urls.length} URLs. Baixando arquivos para o servidor..`);
 
   console.time(`Processo ${processId}: Tempo de download dos arquivos.`);
   let limiteTempoAtingido = false;
@@ -108,8 +109,8 @@ app.post('/juntar-urls', async (req, res) => {
     try {
       if (buffer.byteLength > 96468992) {
         console.log(`Processo ${processId}: A compressão foi cancelada porque o arquivo excede 92MB, levaria tempo demais para comprimir. (Tamanho: ${tamanhoHumanizado(buffer.byteLength)}).`);
-      } else if (paginaAtual > 256) {
-        console.log(`Processo ${processId}: A compressão foi cancelada porque o arquivo tem páginas demais (${paginaAtual}), levaria tempo demais para comprimir. Limite máximo de 256.`);
+      } else if (paginaAtual > 212) {
+        console.log(`Processo ${processId}: A compressão foi cancelada porque o arquivo tem páginas demais (${paginaAtual}), levaria tempo demais para comprimir. Limite máximo de 212.`);
       } else {
         console.log(`Processo ${processId}: Iniciando compressão do PDF.`);
         console.time(`Processo ${processId}: Tempo para comprimir o PDF.`);
@@ -129,7 +130,8 @@ app.post('/juntar-urls', async (req, res) => {
   res.set('Content-Type', 'application/pdf');
   res.set('Content-Disposition', `inline; filename="${req.body.nome ? req.body.nome : 'documento_juntado.pdf'}"`);
   res.send(buffer);
-  console.log(`Processo ${processId}: Finalizado! Arquivo enviado ao cliente com nome: ${nomeArquivo}`);
+  console.log(`Processo ${processId}: Arquivo enviado ao cliente com nome: ${nomeArquivo}.`);
+  console.log(`Processo ${processId}: Fim do processo!`);
 });
 
 /**
