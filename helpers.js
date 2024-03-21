@@ -1,4 +1,8 @@
 const {rgb} = require('pdf-lib');
+const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
+const pdftk = require('node-pdftk');
 
 const responderErro = (res, httpCode = 400, mensagem = '', errorId = 1, extra = {}) => {
   return res.status(httpCode).json({http: httpCode, mensagem, erro: errorId, dados: extra});
@@ -37,4 +41,38 @@ const escreverPaginacao = (PDFPage, nrPagina) => {
   });
 };
 
-module.exports = {tamanhoHumanizado, responderErro, escreverPaginacao};
+/**
+ * Gera um path (caminho completo) para ser usado para criar arquivo temporario, esta função só gera o caminho, não o arquivo.
+ * @param {string} nomeArquivo
+ * @return {string}
+ */
+const gerarPathTemporario = (nomeArquivo) => {
+  const tmpDir = path.join(__dirname, './temp'); // Diretório temporário
+  if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir); // Certifica-se de que o diretório temporário exista
+  return path.normalize(`${tmpDir}/${nomeArquivo}`);
+};
+
+/**
+ * Cria um arquivo temporario, retornando seu local. Lembre-se de usar fs.unlink() para excluir depois.
+ * @param {string | Buffer | TypedArray | DataView} data
+ * @param {string} sufixo
+ * @return {string}
+ */
+const gerarArquivoTemporario = (data, sufixo = '.pdf') => {
+  const uniqueId = crypto.randomBytes(16).toString('hex');
+  const tmpFilePath = gerarPathTemporario(`${uniqueId}${sufixo}`);
+  fs.writeFileSync(tmpFilePath, data); // Escreve os dados no arquivo temporário
+  return tmpFilePath;
+};
+
+/**
+ * Comprime um arquivo PDF usando o PDFTK. (Uma leve compressão nativa do algoritmo da Adobe).
+ * @param {string} filepath Caminho completo para o arquivo de origem, incluindo o nome.
+ * @param {string} output Caminho completo para o arquivo de saída, incluindo o nome.
+ * @return {Promise<Buffer>}
+ */
+const comprimirComPdftk = (filepath, output) => {
+  return pdftk.input(filepath).compress().output(output);
+}
+
+module.exports = {tamanhoHumanizado, responderErro, escreverPaginacao, gerarPathTemporario, gerarArquivoTemporario, comprimirComPdftk};

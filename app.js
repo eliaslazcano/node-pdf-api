@@ -84,6 +84,7 @@ app.post('/juntar-urls', async (req, res) => {
         const [existingPage] = await pdfDoc.copyPages(pdfDocumento, [a]);
         const page = pdfDoc.addPage(existingPage);
         if (!naoPaginar) escreverPaginacao(page, paginaAtual++);
+        else paginaAtual++;
       }
     }
     else if (contentType === 'image/jpeg' || contentType === 'image/png') {
@@ -95,19 +96,20 @@ app.post('/juntar-urls', async (req, res) => {
       const y = (height - (img.height * scale)) / 2;
       page.drawImage(img, {x, y, width: img.width * scale, height: img.height * scale});
       if (!naoPaginar) escreverPaginacao(page, paginaAtual++);
+      else paginaAtual++;
     }
   }
   const pdfSaved = await pdfDoc.save();
   console.timeEnd(`Processo ${processId}: Tempo para construir documento juntado.`);
-  console.log(`Processo ${processId}: O arquivo juntado ficou com ${paginaAtual} páginas.`);
+  console.log(`Processo ${processId}: O arquivo juntado ficou com ${paginaAtual} páginas. ${tamanhoHumanizado(pdfSaved.byteLength)}.`);
 
   let buffer = Buffer.from(pdfSaved);
   if (req.body.comprimir) {
     try {
-      if (buffer.byteLength > 67108864) {
-        console.log(`Processo ${processId}: A compressão foi cancelada porque o arquivo excede 64MB, levaria tempo demais para comprimir. (Tamanho: ${tamanhoHumanizado(buffer.byteLength)}).`);
-      } else if (paginaAtual > 192) {
-        console.log(`Processo ${processId}: A compressão foi cancelada porque o arquivo tem páginas demais (${paginaAtual}), levaria tempo demais para comprimir.`);
+      if (buffer.byteLength > 96468992) {
+        console.log(`Processo ${processId}: A compressão foi cancelada porque o arquivo excede 92MB, levaria tempo demais para comprimir. (Tamanho: ${tamanhoHumanizado(buffer.byteLength)}).`);
+      } else if (paginaAtual > 256) {
+        console.log(`Processo ${processId}: A compressão foi cancelada porque o arquivo tem páginas demais (${paginaAtual}), levaria tempo demais para comprimir. Limite máximo de 256.`);
       } else {
         console.log(`Processo ${processId}: Iniciando compressão do PDF.`);
         console.time(`Processo ${processId}: Tempo para comprimir o PDF.`);
