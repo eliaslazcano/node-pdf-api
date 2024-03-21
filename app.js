@@ -3,6 +3,7 @@ const multer = require('multer');
 const axios = require('axios');
 const gs = require('ghostscript-node');
 const { PDFDocument, rgb } = require('pdf-lib');
+const { setMaxListeners } = require('events');
 
 const app = express();
 app.use(express.json()); //Habilita o interpretador de JSON do Express, caso contrario ele nao saberia o que é JSON.
@@ -35,6 +36,18 @@ const escreverPaginacao = (PDFPage, nrPagina) => {
   });
 };
 
+const tamanhoHumanizado = (bytes, binary = true) => {
+  const base = binary ? 1024 : 1000;
+  if (bytes < base) return `${bytes} B`;
+  const prefix = ['K', 'M', 'G'];
+  let unit = -1;
+  while (Math.abs(bytes) >= base && unit < prefix.length - 1) {
+    bytes /= base;
+    ++unit;
+  }
+  return `${bytes.toFixed(1)} ${prefix[unit]}B`;
+}
+
 const upload = multer();
 
 app.get('/', (req, res) => res.json('TESTE BEM SUCEDIDO'));
@@ -54,6 +67,8 @@ app.get('/', (req, res) => res.json('TESTE BEM SUCEDIDO'));
  * }
  */
 app.post('/juntar-urls', async (req, res) => {
+  const processId = Date.now();
+
   if (!req.is('json')) return responderErro(res, 400, `A requisição não é JSON.`, 1);
   if (!req.body.urls) return responderErro(res, 400, `O JSON enviado está incompleto, falta o parâmetro "urls" em formato Array.`, 2);
   if (!Array.isArray(req.body.urls)) return responderErro(res, 400, `O JSON enviado está incorreto, o parâmetro "urls" não está em formato Array, envie um Array de strings.`, 3);
@@ -62,9 +77,12 @@ app.post('/juntar-urls', async (req, res) => {
   /** @type {string[]} */
   const urls = req.body.urls.filter(i => !!i && typeof i === 'string');
   const naoPaginar = req.body.paginacao === false || req.body.paginacao === null;
+  console.log(`Processo ${processId}: Ordem para juntar ${urls.length} URLs. Iniciando download.`);
 
+  console.time(`Processo ${processId}: Tempo de download dos arquivos.`);
   let limiteTempoAtingido = false;
   const controller = new AbortController();
+  setMaxListeners(100, controller.signal);
   const httpRequisicoes = urls.map(i => axios.get(i, {responseType: 'arraybuffer', signal: controller.signal}));
   const timeoutId = setTimeout(() => {
     limiteTempoAtingido = true;
@@ -80,12 +98,16 @@ app.post('/juntar-urls', async (req, res) => {
   } finally {
     clearTimeout(timeoutId);
   }
+  console.timeEnd(`Processo ${processId}: Tempo de download dos arquivos.`);
 
   const buffers = httpRespostas.map(i => i.data);
   const tamanhoTotal = buffers.reduce((carry, i) => carry + i.byteLength, 0);
+  console.log(`Processo ${processId}: Tamanho total do download: ` + tamanhoHumanizado(tamanhoTotal) + '.');
   if (tamanhoTotal > 104857600) return responderErro(res, 400, 'Você ultrapassou o limite de segurança de 100MB. O arquivo é muito grande para ser combinado. Tente comprimi-lo antes ou reduza a quantidade de arquivos. Os softwares de leitura podem apresentar problemas com este tamanho exagerado e as atividades dos outros usuários podem sofrer interrupções por sobrecarga na rede.', 7);
 
   //A partir daqui começa a construção do documento juntado
+  console.log(`Processo ${processId}: Começando a construir novo PDF.`);
+  console.time(`Processo ${processId}: Tempo para construir documento juntado.`);
   const pdfDoc = await PDFDocument.create();
   let paginaAtual = 1;
   for (let i = 0; i < buffers.length; i++) {
@@ -110,22 +132,37 @@ app.post('/juntar-urls', async (req, res) => {
       if (!naoPaginar) escreverPaginacao(page, paginaAtual++);
     }
   }
-
   const pdfSaved = await pdfDoc.save();
-  let buffer = Buffer.from(pdfSaved);
+  console.timeEnd(`Processo ${processId}: Tempo para construir documento juntado.`);
+  console.log(`Processo ${processId}: O arquivo juntado ficou com ${paginaAtual} páginas.`);
 
+  let buffer = Buffer.from(pdfSaved);
   if (req.body.comprimir) {
     try {
-      const bufferComprimido = await gs.compressPDF(buffer);
-      if (bufferComprimido.byteLength < buffer.byteLength) buffer = bufferComprimido;
+      if (buffer.byteLength > 67108864) {
+        console.log(`Processo ${processId}: A compressão foi cancelada porque o arquivo excede 64MB, levaria tempo demais para comprimir. (Tamanho: ${tamanhoHumanizado(buffer.byteLength)}).`);
+      } else if (paginaAtual > 192) {
+        console.log(`Processo ${processId}: A compressão foi cancelada porque o arquivo tem páginas demais (${paginaAtual}), levaria tempo demais para comprimir.`);
+      } else {
+        console.log(`Processo ${processId}: Iniciando compressão do PDF.`);
+        console.time(`Processo ${processId}: Tempo para comprimir o PDF.`);
+        const bufferComprimido = await gs.compressPDF(buffer);
+        console.timeEnd(`Processo ${processId}: Tempo para comprimir o PDF.`);
+        console.log(`Processo ${processId}: Tamanho pré-compressão: ` + tamanhoHumanizado(buffer.byteLength) + '; Tamanho pós-compressão: ' + tamanhoHumanizado(bufferComprimido.byteLength) + '. Reduzido ' + tamanhoHumanizado(buffer.byteLength - bufferComprimido.byteLength) + '.');
+        if (bufferComprimido.byteLength < buffer.byteLength) buffer = bufferComprimido;
+        else console.log(`Processo ${processId}: A compressão não reduziu o tamanho. Será usado o documento sem compressão.`);
+      }
     } catch (e) {
-      console.log('A compressão falhou.');
+      console.timeEnd(`Processo ${processId}: Tempo para comprimir o PDF.`);
+      console.log(`Processo ${processId}: A compressão falhou. Será usado o documento sem compressão.`);
     }
   }
 
+  const nomeArquivo = req.body.nome ? req.body.nome : 'documento_juntado.pdf';
   res.set('Content-Type', 'application/pdf');
   res.set('Content-Disposition', `inline; filename="${req.body.nome ? req.body.nome : 'documento_juntado.pdf'}"`);
   res.send(buffer);
+  console.log(`Processo ${processId}: Finalizado! Arquivo enviado ao cliente com nome: ${nomeArquivo}`);
 });
 
 /**
