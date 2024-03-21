@@ -77,6 +77,7 @@ app.post('/juntar-urls', async (req, res) => {
   /** @type {string[]} */
   const urls = req.body.urls.filter(i => !!i && typeof i === 'string');
   const naoPaginar = req.body.paginacao === false || req.body.paginacao === null;
+  if (urls.length > 132) return responderErro(res, 400, `Não é possível juntar uma quantia enorme de documentos. Limite máximo de 132. Você tentou juntar ${urls.length}.`);
   console.log(`Processo ${processId}: Ordem para juntar ${urls.length} URLs. Iniciando download.`);
 
   console.time(`Processo ${processId}: Tempo de download dos arquivos.`);
