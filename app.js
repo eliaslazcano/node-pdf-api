@@ -5,6 +5,7 @@ const gs = require('ghostscript-node');
 const { PDFDocument } = require('pdf-lib');
 const { setMaxListeners } = require('events');
 const { responderErro, tamanhoHumanizado, escreverPaginacao } = require('./helpers');
+const { compressImage } = require('./imghelpers');
 
 const LIMIT_MERGE_DOCUMENTS = 132; //quantidade de arquivos que podem caber no juntador (por arquivo, nao por pagina).
 const LIMIT_MERGE_SIZE = 104857600; //limite em bytes do tamanho total dos arquivos que podem caber no juntador (antes da junção).
@@ -229,4 +230,21 @@ app.post('/comprimir-arquivo', upload.any(), async (req, res) => {
   res.set('Content-Type', 'application/pdf');
   res.set('Content-Disposition', `inline; filename="${arquivo.originalname ? 'comprimido_' + arquivo.originalname : 'arquivo_comprimido.pdf'}"`);
   res.send(buffer);
+});
+
+app.post('/comprimir-imagem', upload.any(), async (req, res) => {
+  if (!req.files) return responderErro(res, 400, 'O arquivo não está contido na requisição.', 1);
+  const arquivo = req.files[0];
+  if (!arquivo.mimetype || (arquivo.mimetype !== 'image/jpeg' && arquivo.mimetype !== 'image/png')) return responderErro(res, 400, 'O tipo do arquivo não é compatível.', 2, {'type': arquivo.mimetype});
+  console.log(`Gatilho na API de compressão de imagem. Iniciando.. Tamanho original ${tamanhoHumanizado(arquivo.size)}.`);
+  res.set('Content-Type', arquivo.mimetype);
+  if (arquivo.originalname) res.set('Content-Disposition', `inline; filename="${arquivo.originalname}"`);
+  try {
+    const buffer = await compressImage(arquivo.buffer, .94, 1920, 1920, arquivo.mimetype);
+    console.log(`Compressão de imagem finalizada. Tamanho final ${tamanhoHumanizado(buffer.byteLength)}.`);
+    res.send(buffer.byteLength < arquivo.size ? buffer : arquivo.buffer);
+  } catch (e) {
+    console.log('Compressão de imagem fracassada. Retornando a imagem original.')
+    res.send(arquivo.buffer);
+  }
 });
