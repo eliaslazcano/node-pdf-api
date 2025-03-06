@@ -4,13 +4,16 @@ const axios = require('axios');
 const gs = require('ghostscript-node');
 const { PDFDocument } = require('pdf-lib');
 const { setMaxListeners } = require('events');
-const { responderErro, tamanhoHumanizado, escreverPaginacao } = require('./helpers');
-const { compressImage } = require('./imghelpers');
+const { emitirErro } = require('./src/HttpUtils');
+const { escreverPaginacao } = require('./src/PdfUtils');
+const { comprimirImagem } = require('./src/ImageUtils');
+const { tamanhoHumanizado } = require('./src/FileUtils');
 
-const LIMIT_MERGE_DOCUMENTS = 132; //quantidade de arquivos que podem caber no juntador (por arquivo, nao por pagina).
-const LIMIT_MERGE_SIZE = 104857600; //limite em bytes do tamanho total dos arquivos que podem caber no juntador (antes da junção).
-const LIMIT_COMPRESS_SIZE = 96468992; //limite em bytes do tamanho do arquivo que pode passar pelo compressor. acima do limite o arquivo não será comprimido
-const LIMIT_COMPRESS_PAGES = 198; //limite de páginas que pode passar pelo compressor. acima do limite o arquivo não será comprimido
+const LIMIT_MERGE_DOCUMENTS = Number(process.env.LIMIT_MERGE_DOCUMENTS);
+const LIMIT_MERGE_SIZE = Number(process.env.LIMIT_MERGE_SIZE);
+const LIMIT_COMPRESS_SIZE = Number(process.env.LIMIT_COMPRESS_SIZE);
+const LIMIT_COMPRESS_PAGES = Number(process.env.LIMIT_COMPRESS_PAGES);
+const DOWNLOAD_TIMEOUT = Number(process.env.DOWNLOAD_TIMEOUT);
 
 const app = express();
 app.use(express.json()); //Habilita o interpretador de JSON do Express, caso contrario ele nao saberia o que é JSON.
@@ -20,7 +23,7 @@ app.listen(porta, () => console.log(`SERVIDOR LIGADO. PORTA: ${porta}.`));
 
 const upload = multer();
 
-app.get('/', (req, res) => res.json('TESTE BEM SUCEDIDO'));
+app.get('/test', (req, res) => res.json({mensagem:'TESTE BEM SUCEDIDO', env: process.env}));
 
 /**
  * Gera um arquivo PDF feito pela união de diversos arquivos que são passados via URL.
@@ -39,15 +42,15 @@ app.get('/', (req, res) => res.json('TESTE BEM SUCEDIDO'));
 app.post('/juntar-urls', async (req, res) => {
   const processId = Date.now();
 
-  if (!req.is('json')) return responderErro(res, 400, `A requisição não é JSON.`, 1);
-  if (!req.body.urls) return responderErro(res, 400, `O JSON enviado está incompleto, falta o parâmetro "urls" em formato Array.`, 2);
-  if (!Array.isArray(req.body.urls)) return responderErro(res, 400, `O JSON enviado está incorreto, o parâmetro "urls" não está em formato Array, envie um Array de strings.`, 3);
-  if (req.body.urls.length === 0) return responderErro(res, 400, `O JSON enviado está incorreto, o parâmetro "urls" está vazio.`, 4);
+  if (!req.is('json')) return emitirErro(res, 400, `A requisição não é JSON.`, 1);
+  if (!req.body.urls) return emitirErro(res, 400, `O JSON enviado está incompleto, falta o parâmetro "urls" em formato Array.`, 2);
+  if (!Array.isArray(req.body.urls)) return emitirErro(res, 400, `O JSON enviado está incorreto, o parâmetro "urls" não está em formato Array, envie um Array de strings.`, 3);
+  if (req.body.urls.length === 0) return emitirErro(res, 400, `O JSON enviado está incorreto, o parâmetro "urls" está vazio.`, 4);
 
   /** @type {string[]} */
   const urls = req.body.urls.filter(i => !!i && typeof i === 'string');
   const naoPaginar = req.body.paginacao === false || req.body.paginacao === null;
-  if (urls.length > LIMIT_MERGE_DOCUMENTS) return responderErro(res, 400, `Não é possível juntar uma quantia enorme de documentos. Limite máximo de ${LIMIT_MERGE_DOCUMENTS}. Você tentou juntar ${urls.length}.`);
+  if (urls.length > LIMIT_MERGE_DOCUMENTS) return emitirErro(res, 400, `Não é possível juntar uma quantia enorme de documentos. Limite máximo de ${LIMIT_MERGE_DOCUMENTS} por vez. Você tentou juntar ${urls.length}.`);
   console.log(`Processo ${processId}: Inicio do processo! (Juntador de arquivos).`);
   console.log(`Processo ${processId}: Ordem para juntar ${urls.length} URLs. Baixando arquivos para o servidor..`);
 
@@ -59,14 +62,14 @@ app.post('/juntar-urls', async (req, res) => {
   const timeoutId = setTimeout(() => {
     limiteTempoAtingido = true;
     controller.abort();
-  }, 60000);
+  }, DOWNLOAD_TIMEOUT);
 
   let httpRespostas = [];
   try {
     httpRespostas = await Promise.all(httpRequisicoes);
   } catch (e) {
-    if (limiteTempoAtingido) return responderErro(res, 500, 'O download dos documentos para juntar está tomando tempo demais, seus documentos podem ser grandes demais para juntar. Operação cancelada por prevenção a sobrecarga. Tente comprimir o documento antes ou reduza a quantidade.', 5);
-    return responderErro(res, 400, 'O download dos documentos falhou. Um de seus documentos pode estar corrompido (com defeito) ou ser grande demais para juntar.', 6);
+    if (limiteTempoAtingido) return emitirErro(res, 500, 'O download dos documentos para juntar está tomando tempo demais, seus documentos podem ser grandes demais para juntar. Operação cancelada por prevenção a sobrecarga. Tente comprimir o documento antes ou reduza a quantidade.', 5);
+    return emitirErro(res, 400, 'O download dos documentos falhou. Um de seus documentos pode estar corrompido (com defeito) ou ser grande demais para juntar.', 6);
   } finally {
     clearTimeout(timeoutId);
   }
@@ -75,28 +78,30 @@ app.post('/juntar-urls', async (req, res) => {
   const buffers = httpRespostas.map(i => i.data);
   const tamanhoTotal = buffers.reduce((carry, i) => carry + i.byteLength, 0);
   console.log(`Processo ${processId}: Tamanho total do download: ` + tamanhoHumanizado(tamanhoTotal) + '.');
-  if (tamanhoTotal > LIMIT_MERGE_SIZE) return responderErro(res, 400, `Você ultrapassou o limite de segurança de ${tamanhoHumanizado(LIMIT_MERGE_SIZE)}. O arquivo é muito grande para ser combinado. Tente comprimi-lo antes ou reduza a quantidade de arquivos. Os softwares de leitura podem apresentar problemas com este tamanho exagerado e as atividades dos outros usuários podem sofrer interrupções por sobrecarga na rede.`, 7);
+  if (tamanhoTotal > LIMIT_MERGE_SIZE) return emitirErro(res, 400, `Você ultrapassou o limite de segurança de ${tamanhoHumanizado(LIMIT_MERGE_SIZE)}. O arquivo é muito grande para ser combinado. Tente comprimi-lo antes ou reduza a quantidade de arquivos. Os softwares de leitura podem apresentar problemas com este tamanho exagerado e as atividades dos outros usuários podem sofrer interrupções por sobrecarga na rede.`, 7);
 
   //A partir daqui começa a construção do documento juntado
   console.log(`Processo ${processId}: Começando a construir novo PDF.`);
   console.time(`Processo ${processId}: Tempo para construir documento juntado.`);
-  const pdfDoc = await PDFDocument.create();
+  const pdfNovo = await PDFDocument.create();
   let paginaAtual = 1;
+
   for (let i = 0; i < buffers.length; i++) {
     const contentType = httpRespostas[i].headers.get('content-type');
     if (contentType === 'application/pdf') {
-      const pdfDocumento = await PDFDocument.load(buffers[i]);
-      const pageCount = pdfDocumento.getPageCount();
-      for (let a = 0; a < pageCount; a++) {
-        const [existingPage] = await pdfDoc.copyPages(pdfDocumento, [a]);
-        const page = pdfDoc.addPage(existingPage);
-        if (!naoPaginar) escreverPaginacao(page, paginaAtual++);
+      const pdfOriginal = await PDFDocument.load(buffers[i]);
+
+      // Copiar todas as páginas do PDF atual para o novo documento
+      const copiedPages = await pdfNovo.copyPages(pdfOriginal, pdfOriginal.getPageIndices());
+      copiedPages.forEach((page) => {
+        const newPage = pdfNovo.addPage(page);
+        if (!naoPaginar) escreverPaginacao(newPage, paginaAtual++);
         else paginaAtual++;
-      }
+      });
     }
     else if (contentType === 'image/jpeg' || contentType === 'image/png') {
-      const img = (contentType === 'image/jpeg') ? await pdfDoc.embedJpg(buffers[i]) : await pdfDoc.embedPng(buffers[i]);
-      const page = pdfDoc.addPage();
+      const img = (contentType === 'image/jpeg') ? await pdfNovo.embedJpg(buffers[i]) : await pdfNovo.embedPng(buffers[i]);
+      const page = pdfNovo.addPage();
       const {width, height} = page.getSize();
       const scale = Math.min(width / img.width, height / img.height);
       const x = (width - (img.width * scale)) / 2;
@@ -106,7 +111,7 @@ app.post('/juntar-urls', async (req, res) => {
       else paginaAtual++;
     }
   }
-  const pdfSaved = await pdfDoc.save();
+  const pdfSaved = await pdfNovo.save();
   console.timeEnd(`Processo ${processId}: Tempo para construir documento juntado.`);
   console.log(`Processo ${processId}: O arquivo juntado ficou com ${paginaAtual} páginas. ${tamanhoHumanizado(pdfSaved.byteLength)}.`);
 
@@ -144,14 +149,14 @@ app.post('/juntar-urls', async (req, res) => {
  * Gera um arquivo PDF feito pela união de diversos arquivos que são passados via FormData.
  */
 app.post('/juntar-arquivos', upload.any(), async (req, res) => {
-  if (!req.files) return responderErro(res, 400, 'Os arquivos não estão contidos na requisição.', 1);
+  if (!req.files) return emitirErro(res, 400, 'Os arquivos não estão contidos na requisição.', 1);
 
   const buffers = req.files.map(i => i.buffer);
   const tamanhoTotal = buffers.reduce((carry, i) => carry + i.byteLength, 0);
-  if (tamanhoTotal > 104857600) return responderErro(res, 400, 'Você ultrapassou o limite de segurança de 100MB. O arquivo é muito grande para ser combinado. Tente comprimi-lo antes ou reduza a quantidade de arquivos. Os softwares de leitura podem apresentar problemas com este tamanho exagerado e as atividades dos outros usuários podem sofrer interrupções por sobrecarga na rede.', 7);
+  if (tamanhoTotal > LIMIT_MERGE_SIZE) return emitirErro(res, 400, `Você ultrapassou o limite de segurança de ${tamanhoHumanizado(LIMIT_MERGE_SIZE)}. O arquivo é muito grande para ser combinado. Tente comprimi-lo antes ou reduza a quantidade de arquivos. Os softwares de leitura podem apresentar problemas com este tamanho exagerado e as atividades dos outros usuários podem sofrer interrupções por sobrecarga na rede.`, 7);
 
   //A partir daqui começa a construção do documento juntado
-  const pdfDoc = await PDFDocument.create();
+  const pdfNovo = await PDFDocument.create();
   let paginaAtual = 1;
   for (let i = 0; i < buffers.length; i++) {
     const contentType = req.files[i].mimetype;
@@ -159,14 +164,14 @@ app.post('/juntar-arquivos', upload.any(), async (req, res) => {
       const pdfDocumento = await PDFDocument.load(buffers[i]);
       const pageCount = pdfDocumento.getPageCount();
       for (let a = 0; a < pageCount; a++) {
-        const [existingPage] = await pdfDoc.copyPages(pdfDocumento, [a]);
-        const page = pdfDoc.addPage(existingPage);
+        const [existingPage] = await pdfNovo.copyPages(pdfDocumento, [a]);
+        const page = pdfNovo.addPage(existingPage);
         escreverPaginacao(page, paginaAtual++);
       }
     }
     else if (contentType === 'image/jpeg' || contentType === 'image/png') {
-      const img = (contentType === 'image/jpeg') ? await pdfDoc.embedJpg(buffers[i]) : await pdfDoc.embedPng(buffers[i]);
-      const page = pdfDoc.addPage();
+      const img = (contentType === 'image/jpeg') ? await pdfNovo.embedJpg(buffers[i]) : await pdfNovo.embedPng(buffers[i]);
+      const page = pdfNovo.addPage();
       const {width, height} = page.getSize();
       const scale = Math.min(width / img.width, height / img.height);
       const x = (width - (img.width * scale)) / 2;
@@ -176,7 +181,7 @@ app.post('/juntar-arquivos', upload.any(), async (req, res) => {
     }
   }
 
-  const pdfSaved = await pdfDoc.save();
+  const pdfSaved = await pdfNovo.save();
   let buffer = Buffer.from(pdfSaved);
 
   try {
@@ -196,9 +201,9 @@ app.post('/juntar-arquivos', upload.any(), async (req, res) => {
  * Não faz diferença qual "name" usar no FormData, caso envie vários arquivos apenas um será processado.
  */
 app.post('/comprimir-arquivo', upload.any(), async (req, res) => {
-  if (!req.files) return responderErro(res, 400, 'O arquivo não está contido na requisição.', 1);
+  if (!req.files) return emitirErro(res, 400, 'O arquivo não está contido na requisição.', 1);
   const arquivo = req.files[0];
-  if (!arquivo.mimetype || arquivo.mimetype !== 'application/pdf') return responderErro(res, 400, 'O tipo do arquivo não é PDF.', 2, {'type': arquivo.mimetype});
+  if (!arquivo.mimetype || arquivo.mimetype !== 'application/pdf') return emitirErro(res, 400, 'O tipo do arquivo não é PDF.', 2, {'type': arquivo.mimetype});
 
   const processId = Date.now();
   console.log(`Processo ${processId}: Inicio do processo! (Compressor de arquivo).`);
@@ -232,15 +237,19 @@ app.post('/comprimir-arquivo', upload.any(), async (req, res) => {
   res.send(buffer);
 });
 
+/**
+ * Comprime uma imagem enviada por FormData.
+ * Não faz diferença qual "name" usar no FormData, caso envie vários arquivos apenas um será processado.
+ */
 app.post('/comprimir-imagem', upload.any(), async (req, res) => {
-  if (!req.files) return responderErro(res, 400, 'O arquivo não está contido na requisição.', 1);
+  if (!req.files) return emitirErro(res, 400, 'O arquivo não está contido na requisição.', 1);
   const arquivo = req.files[0];
-  if (!arquivo.mimetype || (arquivo.mimetype !== 'image/jpeg' && arquivo.mimetype !== 'image/png')) return responderErro(res, 400, 'O tipo do arquivo não é compatível.', 2, {'type': arquivo.mimetype});
+  if (!arquivo.mimetype || (arquivo.mimetype !== 'image/jpeg' && arquivo.mimetype !== 'image/png')) return emitirErro(res, 400, 'O tipo do arquivo não é compatível.', 2, {'type': arquivo.mimetype});
   console.log(`Gatilho na API de compressão de imagem. Iniciando.. Tamanho original ${tamanhoHumanizado(arquivo.size)}.`);
   res.set('Content-Type', arquivo.mimetype);
   if (arquivo.originalname) res.set('Content-Disposition', `inline; filename="${arquivo.originalname}"`);
   try {
-    const buffer = await compressImage(arquivo.buffer, .94, 1920, 1920, arquivo.mimetype);
+    const buffer = await comprimirImagem(arquivo.buffer, .94, 1920, 1920, arquivo.mimetype);
     console.log(`Compressão de imagem finalizada. Tamanho final ${tamanhoHumanizado(buffer.byteLength)}.`);
     res.send(buffer.byteLength < arquivo.size ? buffer : arquivo.buffer);
   } catch (e) {

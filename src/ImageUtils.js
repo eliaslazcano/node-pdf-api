@@ -9,7 +9,7 @@ const { createCanvas, loadImage } = require('canvas');
  * @param {string} outputType Formato da imagem da saída, pode ser 'image/jpeg' ou 'image/png'.
  * @returns {Promise<Buffer>} Caminho do arquivo da imagem comprimida.
  */
-const compressImage = async (buffer, outputQuality = 0.96, maxWidth = null, maxHeight = null, outputType = 'image/jpeg') => {
+const comprimirImagem = async (buffer, outputQuality = 0.96, maxWidth = null, maxHeight = null, outputType = 'image/jpeg') => {
   const image = await loadImage(buffer);
   const canvas = createCanvas(image.width, image.height);
   const ctx = canvas.getContext('2d');
@@ -25,4 +25,4 @@ const compressImage = async (buffer, outputQuality = 0.96, maxWidth = null, maxH
   return canvas.toBuffer(outputType, {quality: outputQuality, compressionLevel: 6});
 };
 
-module.exports = { compressImage };
+module.exports = { comprimirImagem };
