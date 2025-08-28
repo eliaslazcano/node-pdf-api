@@ -6,7 +6,7 @@ const fs = require('fs');
 const { PDFDocument } = require('pdf-lib');
 const { setMaxListeners } = require('events');
 const { emitirErro } = require('./src/HttpUtils');
-const { escreverPaginacao } = require('./src/PdfUtils');
+const { escreverPaginacao, compressaoGhostscript} = require('./src/PdfUtils');
 const { comprimirImagem } = require('./src/ImageUtils');
 const { tamanhoHumanizado } = require('./src/FileUtils');
 
@@ -42,6 +42,7 @@ app.get('/test', (req, res) => res.json({mensagem:'TESTE BEM SUCEDIDO', env: pro
  */
 app.post('/juntar-urls', async (req, res) => {
   const processId = Date.now();
+  console.log(`Endpoint: "/juntar-urls", ID do processo: ${processId}.`);
 
   if (!req.is('json')) return emitirErro(res, 400, `A requisição não é JSON.`, 1);
   if (!req.body.urls) return emitirErro(res, 400, `O JSON enviado está incompleto, falta o parâmetro "urls" em formato Array.`, 2);
@@ -52,10 +53,9 @@ app.post('/juntar-urls', async (req, res) => {
   const urls = req.body.urls.filter(i => !!i && typeof i === 'string');
 
   if (urls.length > LIMIT_MERGE_DOCUMENTS) return emitirErro(res, 400, `Não é possível juntar uma quantia enorme de documentos. Limite máximo de ${LIMIT_MERGE_DOCUMENTS} por vez. Você tentou juntar ${urls.length}.`);
-  console.log(`Processo ${processId}: Inicio do processo! (Juntador de arquivos).`);
-  console.log(`Processo ${processId}: Ordem para juntar ${urls.length} URLs. Baixando arquivos para o servidor..`);
+  console.log(`Processo ${processId}: Ordem para juntar ${urls.length} URLs. Baixando arquivos para o servidor...`);
 
-  console.time(`Processo ${processId}: Tempo de download dos arquivos.`);
+  console.time(`Processo ${processId}: Tempo de download dos arquivos`);
   let limiteTempoAtingido = false;
   const controller = new AbortController();
   setMaxListeners(100, controller.signal);
@@ -74,7 +74,7 @@ app.post('/juntar-urls', async (req, res) => {
   } finally {
     clearTimeout(timeoutId);
   }
-  console.timeEnd(`Processo ${processId}: Tempo de download dos arquivos.`);
+  console.timeEnd(`Processo ${processId}: Tempo de download dos arquivos`);
 
   const buffers = httpRespostas.map(i => i.data);
   const tamanhoTotal = buffers.reduce((carry, i) => carry + i.byteLength, 0);
@@ -83,7 +83,7 @@ app.post('/juntar-urls', async (req, res) => {
 
   //A partir daqui começa a construção do documento juntado
   console.log(`Processo ${processId}: Começando a construir novo PDF.`);
-  console.time(`Processo ${processId}: Tempo para construir documento juntado.`);
+  console.time(`Processo ${processId}: Tempo para construir documento juntado`);
   const pdfNovo = await PDFDocument.create(); //Cria um novo documento PDF em branco (por enquanto)
 
   let carimboImagem = null;
@@ -102,6 +102,7 @@ app.post('/juntar-urls', async (req, res) => {
     }
     else if (contentType === 'image/jpeg' || contentType === 'image/png') totalPaginas++;
   }
+  console.time(`Processo ${processId}: Total de paginas estimado: ${totalPaginas}.`);
 
   const paginar = !!req.body?.paginacao;
   let paginaAtual = 1;
@@ -131,7 +132,7 @@ app.post('/juntar-urls', async (req, res) => {
     }
   }
   const pdfSaved = await pdfNovo.save();
-  console.timeEnd(`Processo ${processId}: Tempo para construir documento juntado.`);
+  console.timeEnd(`Processo ${processId}: Tempo para construir documento juntado`);
   console.log(`Processo ${processId}: O arquivo juntado ficou com ${paginaAtual} páginas. ${tamanhoHumanizado(pdfSaved.byteLength)}.`);
 
   let buffer = Buffer.from(pdfSaved);
@@ -141,18 +142,7 @@ app.post('/juntar-urls', async (req, res) => {
     } else if (paginaAtual > LIMIT_COMPRESS_PAGES) {
       console.log(`Processo ${processId}: A compressão não será realizada porque o arquivo tem páginas demais (${paginaAtual}), levaria tempo demais para comprimir. Limite máximo de ${LIMIT_COMPRESS_PAGES}.`);
     } else {
-      console.log(`Processo ${processId}: Iniciando compressão do PDF.`);
-      console.time(`Processo ${processId}: Tempo para comprimir o PDF.`);
-      try {
-        const bufferComprimido = await gs.compressPDF(buffer);
-        console.log(`Processo ${processId}: Tamanho pré-compressão: ` + tamanhoHumanizado(buffer.byteLength) + '; Tamanho pós-compressão: ' + tamanhoHumanizado(bufferComprimido.byteLength) + '. Reduzido ' + tamanhoHumanizado(buffer.byteLength - bufferComprimido.byteLength) + '.');
-        if (bufferComprimido.byteLength < buffer.byteLength) buffer = bufferComprimido;
-        else console.log(`Processo ${processId}: A compressão não reduziu o tamanho. Será usado o documento sem compressão.`);
-      } catch (e) {
-        console.log(`Processo ${processId}: A compressão falhou. Será usado o documento sem compressão.`);
-      } finally {
-        console.timeEnd(`Processo ${processId}: Tempo para comprimir o PDF.`);
-      }
+      buffer = compressaoGhostscript(buffer, processId);
     }
   }
 
@@ -220,12 +210,12 @@ app.post('/juntar-arquivos', upload.any(), async (req, res) => {
  * Não faz diferença qual "name" usar no FormData, caso envie vários arquivos apenas um será processado.
  */
 app.post('/comprimir-arquivo', upload.any(), async (req, res) => {
+  const processId = Date.now();
+  console.log(`Endpoint: "/comprimir-arquivo", ID do processo: ${processId}.`);
+
   if (!req.files) return emitirErro(res, 400, 'O arquivo não está contido na requisição.', 1);
   const arquivo = req.files[0];
   if (!arquivo.mimetype || arquivo.mimetype !== 'application/pdf') return emitirErro(res, 400, 'O tipo do arquivo não é PDF.', 2, {'type': arquivo.mimetype});
-
-  const processId = Date.now();
-  console.log(`Processo ${processId}: Inicio do processo! (Compressor de arquivo).`);
 
   let buffer = Buffer.from(arquivo.buffer);
   if (arquivo.size > LIMIT_COMPRESS_SIZE) {
@@ -237,17 +227,7 @@ app.post('/comprimir-arquivo', upload.any(), async (req, res) => {
       console.log(`Processo ${processId}: A compressão não será realizada porque o arquivo tem páginas demais (${pageCount}), levaria tempo demais para comprimir. Limite máximo de ${LIMIT_COMPRESS_PAGES}.`);
     } else {
       console.log(`Processo ${processId}: Iniciando compressão do PDF. O arquivo possui ${pageCount} páginas e ${tamanhoHumanizado(arquivo.size)}.`);
-      console.time(`Processo ${processId}: Tempo para comprimir o PDF.`);
-      try {
-        const bufferComprimido = await gs.compressPDF(buffer);
-        console.log(`Processo ${processId}: Tamanho pré-compressão: ` + tamanhoHumanizado(buffer.byteLength) + '; Tamanho pós-compressão: ' + tamanhoHumanizado(bufferComprimido.byteLength) + '. Reduzido ' + tamanhoHumanizado(buffer.byteLength - bufferComprimido.byteLength) + '.');
-        if (bufferComprimido.byteLength < buffer.byteLength) buffer = bufferComprimido;
-        else console.log(`Processo ${processId}: A compressão não reduziu o tamanho. Será usado o documento sem compressão.`);
-      } catch (e) {
-        console.log(`Processo ${processId}: A compressão falhou. Será usado o documento sem compressão.`);
-      } finally {
-        console.timeEnd(`Processo ${processId}: Tempo para comprimir o PDF.`);
-      }
+      buffer = compressaoGhostscript(buffer, processId);
     }
   }
 

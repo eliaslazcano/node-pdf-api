@@ -1,7 +1,7 @@
 const {rgb, PDFPage, PDFImage} = require('pdf-lib');
+const {tamanhoHumanizado} = require('./FileUtils');
 const pdftk = require('node-pdftk');
-const fs = require('fs');
-const path = require('path');
+const gs = require('ghostscript-node');
 
 /**
  * Escreve no documento, deixando visível o número da página de acordo com os parametros informados.
@@ -64,6 +64,29 @@ const escreverPaginacao = (PDFPage, nrPagina, qtdPaginas = null, carimboImagem =
 };
 
 /**
+ * Comprime um arquivo PDF usando o Ghostscript.
+ * @param {Buffer<ArrayBuffer>} buffer Arquivo PDF a ser comprimido, carregado em formato ArrayBuffer.
+ * @param {number} processId Apenas para log.
+ * @return {Promise<Buffer<ArrayBuffer>>}
+ */
+const compressaoGhostscript = async (buffer, processId) => {
+  console.log(`Processo ${processId}: Iniciando compressão do PDF.`);
+  console.time(`Processo ${processId}: Tempo para comprimir o PDF`);
+  try {
+    const bufferComprimido = await gs.compressPDF(buffer);
+    console.log(`Processo ${processId}: Tamanho pré-compressão: ` + tamanhoHumanizado(buffer.byteLength) + '; Tamanho pós-compressão: ' + tamanhoHumanizado(bufferComprimido.byteLength) + '. Reduzido ' + tamanhoHumanizado(buffer.byteLength - bufferComprimido.byteLength) + '.');
+    if (bufferComprimido.byteLength < buffer.byteLength) buffer = bufferComprimido;
+    else console.log(`Processo ${processId}: A compressão não reduziu o tamanho. Será usado o documento sem compressão.`);
+  } catch (e) {
+    console.log(e);
+    console.log(`Processo ${processId}: A compressão falhou. Será usado o documento sem compressão.`);
+  } finally {
+    console.timeEnd(`Processo ${processId}: Tempo para comprimir o PDF`);
+  }
+  return buffer;
+};
+
+/**
  * Comprime um arquivo PDF usando o PDFTK. (Uma leve compressão nativa do algoritmo da Adobe).
  * @param {string} filepath Caminho completo para o arquivo de origem, incluindo o nome.
  * @param {string} output Caminho completo para o arquivo de saída, incluindo o nome.
@@ -71,6 +94,6 @@ const escreverPaginacao = (PDFPage, nrPagina, qtdPaginas = null, carimboImagem =
  */
 const comprimirComPdftk = (filepath, output) => {
   return pdftk.input(filepath).compress().output(output);
-}
+};
 
-module.exports = {escreverPaginacao};
+module.exports = {escreverPaginacao, compressaoGhostscript};
