@@ -120,14 +120,14 @@ app.post('/juntar-urls', async (req, res) => {
       copiedPages.forEach((page) => {
         const newPage = pdfNovo.addPage(page);
         if (paginar) escreverPaginacao(newPage, paginaAtual);
-        if (carimbar) carimbarPagina(newPage, carimboImagem);
+        if (carimbar) carimbarPagina(newPage, carimboImagem, `Fls. ${paginaAtual}/${totalPaginas}.`);
         paginaAtual++;
       });
     }
     else if (contentType === 'image/jpeg' || contentType === 'image/png') {
       const newPage = await inserirImagem(pdfNovo, contentType, buffers[i]);
       if (paginar) escreverPaginacao(newPage, paginaAtual);
-      if (carimbar) carimbarPagina(newPage, carimboImagem);
+      if (carimbar) carimbarPagina(newPage, carimboImagem, `Fls. ${paginaAtual}/${totalPaginas}.`);
       paginaAtual++;
     }
   }
@@ -142,7 +142,7 @@ app.post('/juntar-urls', async (req, res) => {
     } else if (paginaAtual > LIMIT_COMPRESS_PAGES) {
       console.log(`Processo ${processId}: A compressão não será realizada porque o arquivo tem páginas demais (${paginaAtual}), levaria tempo demais para comprimir. Limite máximo de ${LIMIT_COMPRESS_PAGES}.`);
     } else {
-      buffer = compressaoGhostscript(buffer, processId);
+      buffer = await compressaoGhostscript(buffer, processId);
     }
   }
 
@@ -220,7 +220,7 @@ app.post('/comprimir-arquivo', upload.any(), async (req, res) => {
       console.log(`Processo ${processId}: A compressão não será realizada porque o arquivo tem páginas demais (${pageCount}), levaria tempo demais para comprimir. Limite máximo de ${LIMIT_COMPRESS_PAGES}.`);
     } else {
       console.log(`Processo ${processId}: Iniciando compressão do PDF. O arquivo possui ${pageCount} páginas e ${tamanhoHumanizado(arquivo.size)}.`);
-      buffer = compressaoGhostscript(buffer, processId);
+      buffer = await compressaoGhostscript(buffer, processId);
     }
   }
 
