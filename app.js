@@ -6,7 +6,7 @@ const fs = require('fs');
 const { PDFDocument } = require('pdf-lib');
 const { setMaxListeners } = require('events');
 const { emitirErro } = require('./src/HttpUtils');
-const { escreverPaginacao, compressaoGhostscript} = require('./src/PdfUtils');
+const { inserirImagem, escreverPaginacao, carimbarPagina, compressaoGhostscript} = require('./src/PdfUtils');
 const { comprimirImagem } = require('./src/ImageUtils');
 const { tamanhoHumanizado } = require('./src/FileUtils');
 
@@ -49,8 +49,13 @@ app.post('/juntar-urls', async (req, res) => {
   if (!Array.isArray(req.body.urls)) return emitirErro(res, 400, `O JSON enviado está incorreto, o parâmetro "urls" não está em formato Array, envie um Array de strings.`, 3);
   if (req.body.urls.length === 0) return emitirErro(res, 400, `O JSON enviado está incorreto, o parâmetro "urls" está vazio.`, 4);
 
+  //Coleta todos os parametros recebidos (e hidrata se for necessario)
   /** @type {string[]} */
   const urls = req.body.urls.filter(i => !!i && typeof i === 'string');
+  const carimbar = !!req.body?.carimbar;
+  const comprimir = !!req.body?.comprimir;
+  const paginar = !!req.body?.paginacao;
+  const nomeArquivo = req.body.nome ? req.body.nome : 'documento_juntado.pdf';
 
   if (urls.length > LIMIT_MERGE_DOCUMENTS) return emitirErro(res, 400, `Não é possível juntar uma quantia enorme de documentos. Limite máximo de ${LIMIT_MERGE_DOCUMENTS} por vez. Você tentou juntar ${urls.length}.`);
   console.log(`Processo ${processId}: Ordem para juntar ${urls.length} URLs. Baixando arquivos para o servidor...`);
@@ -87,7 +92,7 @@ app.post('/juntar-urls', async (req, res) => {
   const pdfNovo = await PDFDocument.create(); //Cria um novo documento PDF em branco (por enquanto)
 
   let carimboImagem = null;
-  if (req.body?.carimbar) {
+  if (carimbar) {
     const carimboBuffer = fs.readFileSync('./assets/carimbo02.png');
     carimboImagem = await pdfNovo.embedPng(carimboBuffer.buffer);
   }
@@ -104,7 +109,6 @@ app.post('/juntar-urls', async (req, res) => {
   }
   console.time(`Processo ${processId}: Total de paginas estimado: ${totalPaginas}.`);
 
-  const paginar = !!req.body?.paginacao;
   let paginaAtual = 1;
   for (let i = 0; i < buffers.length; i++) {
     const contentType = httpRespostas[i].headers.get('content-type');
@@ -115,20 +119,16 @@ app.post('/juntar-urls', async (req, res) => {
       const copiedPages = await pdfNovo.copyPages(pdfOriginal, pdfOriginal.getPageIndices());
       copiedPages.forEach((page) => {
         const newPage = pdfNovo.addPage(page);
-        if (paginar) escreverPaginacao(newPage, paginaAtual++, totalPaginas, carimboImagem);
-        else paginaAtual++;
+        if (paginar) escreverPaginacao(newPage, paginaAtual);
+        if (carimbar) carimbarPagina(newPage, carimboImagem);
+        paginaAtual++;
       });
     }
     else if (contentType === 'image/jpeg' || contentType === 'image/png') {
-      const img = (contentType === 'image/jpeg') ? await pdfNovo.embedJpg(buffers[i]) : await pdfNovo.embedPng(buffers[i]);
-      const page = pdfNovo.addPage();
-      const {width, height} = page.getSize();
-      const scale = Math.min(width / img.width, height / img.height);
-      const x = (width - (img.width * scale)) / 2;
-      const y = (height - (img.height * scale)) / 2;
-      page.drawImage(img, {x, y, width: img.width * scale, height: img.height * scale});
-      if (paginar) escreverPaginacao(page, paginaAtual++, totalPaginas, carimboImagem);
-      else paginaAtual++;
+      const newPage = await inserirImagem(pdfNovo, contentType, buffers[i]);
+      if (paginar) escreverPaginacao(newPage, paginaAtual);
+      if (carimbar) carimbarPagina(newPage, carimboImagem);
+      paginaAtual++;
     }
   }
   const pdfSaved = await pdfNovo.save();
@@ -136,7 +136,7 @@ app.post('/juntar-urls', async (req, res) => {
   console.log(`Processo ${processId}: O arquivo juntado ficou com ${paginaAtual} páginas. ${tamanhoHumanizado(pdfSaved.byteLength)}.`);
 
   let buffer = Buffer.from(pdfSaved);
-  if (req.body.comprimir) {
+  if (comprimir) {
     if (buffer.byteLength > LIMIT_COMPRESS_SIZE) {
       console.log(`Processo ${processId}: A compressão não será realizada porque o arquivo excede ${tamanhoHumanizado(LIMIT_COMPRESS_SIZE)}, levaria tempo demais para comprimir. (Tamanho: ${tamanhoHumanizado(buffer.byteLength)}).`);
     } else if (paginaAtual > LIMIT_COMPRESS_PAGES) {
@@ -146,9 +146,8 @@ app.post('/juntar-urls', async (req, res) => {
     }
   }
 
-  const nomeArquivo = req.body.nome ? req.body.nome : 'documento_juntado.pdf';
   res.set('Content-Type', 'application/pdf');
-  res.set('Content-Disposition', `inline; filename="${req.body.nome ? req.body.nome : 'documento_juntado.pdf'}"`);
+  res.set('Content-Disposition', `inline; filename="${nomeArquivo}"`);
   res.send(buffer);
   console.log(`Processo ${processId}: Arquivo enviado ao cliente com nome: ${nomeArquivo}.`);
   console.log(`Processo ${processId}: Fim do processo!`);
@@ -179,13 +178,7 @@ app.post('/juntar-arquivos', upload.any(), async (req, res) => {
       }
     }
     else if (contentType === 'image/jpeg' || contentType === 'image/png') {
-      const img = (contentType === 'image/jpeg') ? await pdfNovo.embedJpg(buffers[i]) : await pdfNovo.embedPng(buffers[i]);
-      const page = pdfNovo.addPage();
-      const {width, height} = page.getSize();
-      const scale = Math.min(width / img.width, height / img.height);
-      const x = (width - (img.width * scale)) / 2;
-      const y = (height - (img.height * scale)) / 2;
-      page.drawImage(img, {x, y, width: img.width * scale, height: img.height * scale});
+      const page = await inserirImagem(pdfNovo, contentType, buffers[i]);
       escreverPaginacao(page, paginaAtual++);
     }
   }
