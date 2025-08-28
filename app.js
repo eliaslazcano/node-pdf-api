@@ -49,7 +49,7 @@ app.post('/juntar-urls', async (req, res) => {
 
   /** @type {string[]} */
   const urls = req.body.urls.filter(i => !!i && typeof i === 'string');
-  const naoPaginar = req.body.paginacao === false || req.body.paginacao === null;
+  const paginar = req.body.paginacao && req.body.paginacao !== false && req.body.paginacao !== null;
   if (urls.length > LIMIT_MERGE_DOCUMENTS) return emitirErro(res, 400, `Não é possível juntar uma quantia enorme de documentos. Limite máximo de ${LIMIT_MERGE_DOCUMENTS} por vez. Você tentou juntar ${urls.length}.`);
   console.log(`Processo ${processId}: Inicio do processo! (Juntador de arquivos).`);
   console.log(`Processo ${processId}: Ordem para juntar ${urls.length} URLs. Baixando arquivos para o servidor..`);
@@ -95,7 +95,7 @@ app.post('/juntar-urls', async (req, res) => {
       const copiedPages = await pdfNovo.copyPages(pdfOriginal, pdfOriginal.getPageIndices());
       copiedPages.forEach((page) => {
         const newPage = pdfNovo.addPage(page);
-        if (!naoPaginar) escreverPaginacao(newPage, paginaAtual++);
+        if (paginar) escreverPaginacao(newPage, paginaAtual++);
         else paginaAtual++;
       });
     }
@@ -107,7 +107,7 @@ app.post('/juntar-urls', async (req, res) => {
       const x = (width - (img.width * scale)) / 2;
       const y = (height - (img.height * scale)) / 2;
       page.drawImage(img, {x, y, width: img.width * scale, height: img.height * scale});
-      if (!naoPaginar) escreverPaginacao(page, paginaAtual++);
+      if (paginar) escreverPaginacao(page, paginaAtual++);
       else paginaAtual++;
     }
   }
