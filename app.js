@@ -2,6 +2,7 @@ const express = require('express');
 const multer = require('multer');
 const axios = require('axios');
 const gs = require('ghostscript-node');
+const fs = require('fs');
 const { PDFDocument } = require('pdf-lib');
 const { setMaxListeners } = require('events');
 const { emitirErro } = require('./src/HttpUtils');
@@ -49,7 +50,7 @@ app.post('/juntar-urls', async (req, res) => {
 
   /** @type {string[]} */
   const urls = req.body.urls.filter(i => !!i && typeof i === 'string');
-  const paginar = req.body.paginacao && req.body.paginacao !== false && req.body.paginacao !== null;
+
   if (urls.length > LIMIT_MERGE_DOCUMENTS) return emitirErro(res, 400, `Não é possível juntar uma quantia enorme de documentos. Limite máximo de ${LIMIT_MERGE_DOCUMENTS} por vez. Você tentou juntar ${urls.length}.`);
   console.log(`Processo ${processId}: Inicio do processo! (Juntador de arquivos).`);
   console.log(`Processo ${processId}: Ordem para juntar ${urls.length} URLs. Baixando arquivos para o servidor..`);
@@ -83,19 +84,37 @@ app.post('/juntar-urls', async (req, res) => {
   //A partir daqui começa a construção do documento juntado
   console.log(`Processo ${processId}: Começando a construir novo PDF.`);
   console.time(`Processo ${processId}: Tempo para construir documento juntado.`);
-  const pdfNovo = await PDFDocument.create();
-  let paginaAtual = 1;
+  const pdfNovo = await PDFDocument.create(); //Cria um novo documento PDF em branco (por enquanto)
 
+  let carimboImagem = null;
+  if (req.body?.carimbar) {
+    const carimboBuffer = fs.readFileSync('./assets/carimbo02.png');
+    carimboImagem = await pdfNovo.embedPng(carimboBuffer.buffer);
+  }
+
+  //Contagem do total de paginas estimado
+  let totalPaginas = 0;
   for (let i = 0; i < buffers.length; i++) {
     const contentType = httpRespostas[i].headers.get('content-type');
     if (contentType === 'application/pdf') {
       const pdfOriginal = await PDFDocument.load(buffers[i]);
+      totalPaginas += pdfOriginal.getPageCount();
+    }
+    else if (contentType === 'image/jpeg' || contentType === 'image/png') totalPaginas++;
+  }
+
+  const paginar = !!req.body?.paginacao;
+  let paginaAtual = 1;
+  for (let i = 0; i < buffers.length; i++) {
+    const contentType = httpRespostas[i].headers.get('content-type');
+    if (contentType === 'application/pdf') {
+      const pdfOriginal = await PDFDocument.load(buffers[i]); //Carrega o PDF de origem
 
       // Copiar todas as páginas do PDF atual para o novo documento
       const copiedPages = await pdfNovo.copyPages(pdfOriginal, pdfOriginal.getPageIndices());
       copiedPages.forEach((page) => {
         const newPage = pdfNovo.addPage(page);
-        if (paginar) escreverPaginacao(newPage, paginaAtual++);
+        if (paginar) escreverPaginacao(newPage, paginaAtual++, totalPaginas, carimboImagem);
         else paginaAtual++;
       });
     }
@@ -107,7 +126,7 @@ app.post('/juntar-urls', async (req, res) => {
       const x = (width - (img.width * scale)) / 2;
       const y = (height - (img.height * scale)) / 2;
       page.drawImage(img, {x, y, width: img.width * scale, height: img.height * scale});
-      if (paginar) escreverPaginacao(page, paginaAtual++);
+      if (paginar) escreverPaginacao(page, paginaAtual++, totalPaginas, carimboImagem);
       else paginaAtual++;
     }
   }

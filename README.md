@@ -15,6 +15,7 @@ Endpoints da API:
 ```bash
 docker builder prune
 docker build -t  eliaslazcano/pdfapi:1.3 .
+docker run -d -p 3000:3000 --name=pdfapi --log-driver json-file --log-opt max-size=1m --log-opt max-file=2 eliaslazcano/pdfapi:1.3
 ```
 
 ## Executar o container
