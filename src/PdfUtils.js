@@ -22,6 +22,58 @@ const inserirImagem = async (PDFDocument, contentType, buffer) => {
 }
 
 /**
+ * Desenha texto em uma página com alinhamento e quebra de linha (feita por IA).
+ * @param {PDFPage} page - Página do PDF
+ * @param {string} text - Texto a ser desenhado
+ * @param {object} options - Opções
+ *   - x: posição X inicial do "box"
+ *   - y: posição Y inicial
+ *   - font: fonte (PDFFont)
+ *   - size: tamanho da fonte
+ *   - color: cor do texto (padrão: preto)
+ *   - lineHeight: espaçamento entre linhas (padrão: size * 1.2)
+ *   - maxWidth: largura máxima do box
+ *   - align: "left" | "center" | "right" (padrão: left)
+ */
+const inserirTexto = (page, text, {x = 0, y = 0, font, size = 12,
+  color = rgb(0, 0, 0), lineHeight, maxWidth = 400, align = 'left',}) => {
+  if (!font) throw new Error("A fonte (font) é obrigatória!");
+
+  lineHeight = lineHeight || size * 1.2;
+
+  // Quebra texto em linhas respeitando maxWidth
+  const words = text.split(' ');
+  let lines = [];
+  let currentLine = '';
+
+  for (let word of words) {
+    let testLine = currentLine ? currentLine + ' ' + word : word;
+    let lineWidth = font.widthOfTextAtSize(testLine, size);
+
+    if (lineWidth > maxWidth && currentLine) {
+      lines.push(currentLine);
+      currentLine = word;
+    } else {
+      currentLine = testLine;
+    }
+  }
+  if (currentLine) lines.push(currentLine);
+
+  // Desenha cada linha com alinhamento
+  for (let line of lines) {
+    const lineWidth = font.widthOfTextAtSize(line, size);
+
+    let drawX = x;
+    if (align === 'center') drawX = x + (maxWidth - lineWidth) / 2;
+    else if (align === 'right') drawX = x + (maxWidth - lineWidth);
+
+    page.drawText(line, {x: drawX, y, size, font, color,});
+
+    y -= lineHeight;
+  }
+}
+
+/**
  * Escreve no documento, deixando visível o número da página de acordo com os parametros informados.
  * @param {PDFPage} PDFPage Instancia de PDFPage.
  * @param {number|string} nrPagina Número para escrever na página.
@@ -53,9 +105,10 @@ const escreverPaginacao = (PDFPage, nrPagina) => {
  * Aplica um desenho de carimbo.
  * @param {PDFPage} PDFPage Instancia de PDFPage.
  * @param {PDFImage|null} carimboImagem Imagem do carimbo.
+ * @param {PDFFont} fonte
  * @param {string} texto Texto a ser exibido no carimbo.
  */
-const carimbarPagina = (PDFPage, carimboImagem, texto = '') => {
+const carimbarPagina = (PDFPage, carimboImagem, fonte, texto = '') => {
   PDFPage.drawImage(carimboImagem, {
     x: PDFPage.getWidth() - 110,
     y: PDFPage.getHeight() - 128,
@@ -64,23 +117,33 @@ const carimbarPagina = (PDFPage, carimboImagem, texto = '') => {
   });
 
   if (texto) {
-    PDFPage.drawRectangle({
-      x: PDFPage.getWidth() - 110 + 10, //width do carimbo (60), ocupando 40 com o retangulo, sobra 20 que divide 10 pra cada lado. Por isso o nr 10
-      y: PDFPage.getHeight() - 128 + 30 - 6, //30 = metade da altura do PNG, 6 = metade da altura do retangulo
-      width: 40,
-      height: 12,
-      borderWidth: 0,
-      borderColor: rgb(0.7, 0.7, 0.7),
-      color: rgb(1, 1, 1),
-      opacity: 1,
-      borderOpacity: 1
-    });
+    //Usado em desenvolvimento pra ter nocao do local onde inserimos textos
+    // PDFPage.drawRectangle({
+    //   x: PDFPage.getWidth() - 110 + 10, //width do carimbo (60), ocupando 40 com o retangulo, sobra 20 que divide 10 pra cada lado. Por isso o nr 10
+    //   y: PDFPage.getHeight() - 128 + 30 - 12, //30 = metade da altura do PNG, 6 = metade da altura do retangulo
+    //   width: 40,
+    //   height: 12,
+    //   borderWidth: 1,
+    //   borderColor: rgb(0.7, 0.7, 0.7),
+    //   color: rgb(1, 1, 1),
+    //   opacity: 1,
+    //   borderOpacity: 1
+    // });
 
-    PDFPage.drawText(texto, {
-      x: PDFPage.getWidth() - 75 - (texto.length * 3), //0chars = -75, 1chars = -78, 2chars = -81, 3chars = -84, 4chars = -87, 5chars = -90, 6chars = -93, 7chars = -96
-      y: PDFPage.getHeight() - 128 + 30 - 4,
+    PDFPage.drawText('Fls.', {
+      x: PDFPage.getWidth() - 75 - 12, //0chars = -75, 1chars = -78, 2chars = -81, 3chars = -84, 4chars = -87, 5chars = -90, 6chars = -93, 7chars = -96
+      y: PDFPage.getHeight() - 128 + 30,
       size: 11,
       color: rgb(0, 0, 0)
+    });
+
+    inserirTexto(PDFPage, texto, {
+      x: PDFPage.getWidth() - 110 + 10,
+      y: PDFPage.getHeight() - 128 + 30 - 12,
+      font: fonte,
+      size: 11,
+      maxWidth: 40,
+      align: 'center',
     });
   }
 };

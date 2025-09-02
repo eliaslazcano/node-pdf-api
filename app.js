@@ -3,7 +3,7 @@ const multer = require('multer');
 const axios = require('axios');
 const gs = require('ghostscript-node');
 const fs = require('fs');
-const { PDFDocument } = require('pdf-lib');
+const { PDFDocument, StandardFonts } = require('pdf-lib');
 const { setMaxListeners } = require('events');
 const { emitirErro } = require('./src/HttpUtils');
 const { inserirImagem, escreverPaginacao, carimbarPagina, compressaoGhostscript} = require('./src/PdfUtils');
@@ -90,7 +90,9 @@ app.post('/juntar-urls', async (req, res) => {
   console.log(`Processo ${processId}: Começando a construir novo PDF.`);
   console.time(`Processo ${processId}: Tempo para construir documento juntado`);
   const pdfNovo = await PDFDocument.create(); //Cria um novo documento PDF em branco (por enquanto)
+  const font = await pdfNovo.embedFont(StandardFonts.Helvetica);
 
+  //Preparando o carimbo venha a precisar
   let carimboImagem = null;
   if (carimbar) {
     const carimboBuffer = fs.readFileSync('./assets/carimbo02.png');
@@ -120,14 +122,14 @@ app.post('/juntar-urls', async (req, res) => {
       copiedPages.forEach((page) => {
         const newPage = pdfNovo.addPage(page);
         if (paginar) escreverPaginacao(newPage, paginaAtual);
-        if (carimbar) carimbarPagina(newPage, carimboImagem, `Fls. ${paginaAtual}/${totalPaginas}.`);
+        if (carimbar) carimbarPagina(newPage, carimboImagem, font, `${paginaAtual}/${totalPaginas}`);
         paginaAtual++;
       });
     }
     else if (contentType === 'image/jpeg' || contentType === 'image/png') {
       const newPage = await inserirImagem(pdfNovo, contentType, buffers[i]);
       if (paginar) escreverPaginacao(newPage, paginaAtual);
-      if (carimbar) carimbarPagina(newPage, carimboImagem, `Fls. ${paginaAtual}/${totalPaginas}.`);
+      if (carimbar) carimbarPagina(newPage, carimboImagem, font, `${paginaAtual}/${totalPaginas}`);
       paginaAtual++;
     }
   }
