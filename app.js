@@ -8,7 +8,7 @@ const { setMaxListeners } = require('events');
 const { emitirErro } = require('./src/HttpUtils');
 const { inserirImagem, escreverPaginacao, carimbarPagina, compressaoGhostscript} = require('./src/PdfUtils');
 const { comprimirImagem } = require('./src/ImageUtils');
-const { tamanhoHumanizado } = require('./src/FileUtils');
+const { tamanhoHumanizado, getFileName } = require('./src/FileUtils');
 
 const LIMIT_MERGE_DOCUMENTS = Number(process.env.LIMIT_MERGE_DOCUMENTS);
 const LIMIT_MERGE_SIZE = Number(process.env.LIMIT_MERGE_SIZE);
@@ -58,7 +58,7 @@ app.post('/juntar-urls', async (req, res) => {
   const nomeArquivo = req.body.nome ? req.body.nome : 'documento_juntado.pdf';
 
   if (urls.length > LIMIT_MERGE_DOCUMENTS) return emitirErro(res, 400, `Não é possível juntar uma quantia enorme de documentos. Limite máximo de ${LIMIT_MERGE_DOCUMENTS} por vez. Você tentou juntar ${urls.length}.`);
-  console.log(`Processo ${processId}: Ordem para juntar ${urls.length} URLs. Baixando arquivos para o servidor...`);
+  console.log(`Processo ${processId}: URLs: ${urls.length}. Paginar: ${paginar ? 'S' : 'N'}. Comprimir: ${comprimir ? 'S' : 'N'}. Carimbar: ${carimbar ? 'S' : 'N'}. Nome sugerido: ${nomeArquivo}. Baixando...`);
 
   console.time(`Processo ${processId}: Tempo de download dos arquivos`);
   let limiteTempoAtingido = false;
@@ -104,8 +104,18 @@ app.post('/juntar-urls', async (req, res) => {
   for (let i = 0; i < buffers.length; i++) {
     const contentType = httpRespostas[i].headers.get('content-type');
     if (contentType === 'application/pdf') {
-      const pdfOriginal = await PDFDocument.load(buffers[i]);
-      totalPaginas += pdfOriginal.getPageCount();
+      try {
+        const pdfOriginal = await PDFDocument.load(buffers[i]);
+        totalPaginas += pdfOriginal.getPageCount();
+      } catch (e) {
+        console.log(`Erro ao carregar o arquivo ${urls[i]}.`);
+        const fileName = getFileName(urls[i]);
+        if (e && e.message && e.message.includes('encrypted')) {
+          return emitirErro(res, 400, `O arquivo "${fileName}" não pôde ser processado porque está protegido por senha ou criptografia.`, 8);
+        } else {
+          return emitirErro(res, 400, `O arquivo "${fileName}" não pôde ser processado porque está corrompido ou bloqueado.`, 9);
+        }
+      }
     }
     else if (contentType === 'image/jpeg' || contentType === 'image/png') totalPaginas++;
   }

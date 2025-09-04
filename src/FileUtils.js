@@ -44,4 +44,9 @@ const tamanhoHumanizado = (bytes, binary = true) => {
   return `${bytes.toFixed(1)} ${prefix[unit]}B`;
 };
 
-module.exports = {gerarPathTemporario, gerarArquivoTemporario, tamanhoHumanizado}
+const getFileName = (filePath) => {
+  const parts = filePath.split('/');
+  return parts[parts.length - 1];
+};
+
+module.exports = {gerarPathTemporario, gerarArquivoTemporario, tamanhoHumanizado, getFileName}
